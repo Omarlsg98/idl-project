@@ -1,0 +1,13 @@
+torch
+numpy
+torchsummaryX
+sklearn
+pandas
+tqdm
+wandb
+kaggle==1.5.8
+black
+torchvision
+PIL
+timm
+sklearn
