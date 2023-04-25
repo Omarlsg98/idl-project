@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  youtube-id:
+    image: youtube-id
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+      args:
+        ACTUAL_LAMBDA: lambda_youtube_id
+        LAMBDA_ENTRYPOINT: lambda_handler
+    ports:
+      - 9000:8080
+    env_file: .env
+
+  youtube_download:
+    image: youtube_download
+    build:
+      context: ./youtube_download/
+      dockerfile: ./Dockerfile
+    env_file: ./youtube_download/.env
+
+  youtube_id:
+    image: youtube_id
+    build:
+      context: ./youtube_id/
+      dockerfile: ./Dockerfile
+    env_file: ./youtube_id/.env
