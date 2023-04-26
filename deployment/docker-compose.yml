@@ -1,8 +1,8 @@
 version: "3.9"
 
 services:
-  youtube-id:
-    image: youtube-id
+  youtube_id_lambda:
+    image: youtube_id_lambda
     build:
       context: ./
       dockerfile: ./Dockerfile
@@ -26,3 +26,11 @@ services:
       context: ./youtube_id/
       dockerfile: ./Dockerfile
     env_file: ./youtube_id/.env
+
+  trainer_audiolm:
+    image: trainer_audiolm
+    build:
+      context: ./trainer_audiolm/
+      dockerfile: ./Dockerfile
+    env_file: ./trainer_audiolm/.env
+    command: python app.py semantic --run_number 0

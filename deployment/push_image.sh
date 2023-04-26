@@ -14,7 +14,7 @@
 #import .env variables
 export $(cat .env | xargs) &> /dev/null
 
-accepted_values="id download"
+accepted_values="id download trainer_audiolm"
 input=$1
 
 if [[ -z $input  ]];then
@@ -26,11 +26,13 @@ fi
 declare -A local_image_name
 local_image_name["id"]="youtube_id"
 local_image_name["download"]="youtube_download"
+local_image_name["trainer_audiolm"]="trainer_audiolm"
 
 ## ECR_* variables are specified in the .env file
 declare -A remote_image_name
 remote_image_name["id"]=$ECR_YOUTUBE_ID
 remote_image_name["download"]=$ECR_YOUTUBE_DOWNLOAD
+remote_image_name["trainer_audiolm"]=$ECR_TRAINER_AUDIOLM
 
 echo $ECR_YOUTUBE_ID
 
