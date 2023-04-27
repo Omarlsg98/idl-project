@@ -2,6 +2,7 @@ import argparse
 import os
 import traceback
 import urllib.request
+from glob import glob
 
 import laion_clap
 import torch
@@ -30,7 +31,7 @@ from vector_quantize_pytorch import ResidualVQ
 load_dotenv()
 wandb.login(key=os.environ["WANDB_KEY"])
 
-RESULTS_ROOT_PATH = "/home/ubuntu/results"
+RESULTS_ROOT_PATH = "/mnt/data/results"
 
 dataset_folder = "/mnt/data/data/"
 hubert_ckpt = "hubert/hubert_base_ls960.pt"
@@ -60,11 +61,12 @@ if not os.path.isfile(hubert_quantizer):
 
 def custom_train(trainer, log_fn):
     while trainer.steps < trainer.num_train_steps:
+        torch.cuda.empty_cache()
         try:
             logs = trainer.train_step()
             log_fn(logs)
         except RuntimeError as e:
-            traceback.print_stack()
+            print(traceback.format_exc())
             print(e)
 
     model_path = str(trainer.results_folder / f"transformer.last.pt")
@@ -177,10 +179,19 @@ DATA_SIZE = 96113
 EPOCHS = 15
 
 
-def get_trainer(trainer_type, soundstream, wav2vec, quantizer, **kwargs):
+def get_trainer(
+    trainer_type,
+    soundstream,
+    wav2vec,
+    quantizer,
+    batch_size=1,
+    data_max_lenght_sec=10,
+    **kwargs,
+):
     torch.cuda.empty_cache()
+    print(f"Getting trainer {trainer_type}...")
     total_steps = DATA_SIZE * EPOCHS + 1
-    save_every = 10000
+    save_every = 300
     if trainer_type == "semantic":
         semantic_transformer = SemanticTransformer(
             num_semantic_tokens=wav2vec.codebook_size,
@@ -194,8 +205,8 @@ def get_trainer(trainer_type, soundstream, wav2vec, quantizer, **kwargs):
             wav2vec=wav2vec,
             audio_conditioner=quantizer,
             folder=dataset_folder,
-            batch_size=4,
-            data_max_length_seconds=30,
+            batch_size=batch_size,
+            data_max_length_seconds=data_max_lenght_sec,
             save_results_every=save_every,
             save_model_every=save_every,
             num_train_steps=total_steps,
@@ -219,8 +230,8 @@ def get_trainer(trainer_type, soundstream, wav2vec, quantizer, **kwargs):
             wav2vec=wav2vec,
             audio_conditioner=quantizer,
             folder=dataset_folder,
-            batch_size=1,
-            data_max_length_seconds=10,
+            batch_size=batch_size,
+            data_max_length_seconds=data_max_lenght_sec,
             save_results_every=save_every,
             save_model_every=save_every,
             num_train_steps=total_steps,
@@ -243,11 +254,11 @@ def get_trainer(trainer_type, soundstream, wav2vec, quantizer, **kwargs):
             codec=soundstream,
             audio_conditioner=quantizer,
             folder=dataset_folder,
-            batch_size=1,
-            data_max_length_seconds=5,
+            batch_size=batch_size,
+            data_max_length_seconds=data_max_lenght_sec,
             save_results_every=save_every,
             save_model_every=save_every,
-            num_train_steps=300 + 1,
+            num_train_steps=total_steps,
             results_folder=RESULTS_ROOT_PATH + "/results_fine",
             force_clear_prev_results=False,
         )
@@ -284,18 +295,39 @@ def parse_arguments():
     parser.add_argument(
         "model_to_train", choices=["fine", "coarse", "semantic", "inference"]
     )
-    parser.add_argument("-l", "--load_ckpt", default=False)
-    parser.add_argument("-r", "--run_number", default=0)
-    parser.add_argument("-s", "--semantic_load_ckp")
-    parser.add_argument("-c", "--coarse_load_ckp")
-    parser.add_argument("-f", "--fine_load_ckp")
+    parser.add_argument("-l", "--load_ckpt", default=False, type=bool)
+    parser.add_argument("-n", "--run_number", default=0)
+    parser.add_argument("-r", "--resume", default=False, type=bool)
+    parser.add_argument("-bs", "--batch_size", default=1, type=int)
+    parser.add_argument("-dls", "--data_max_lenght_sec", default=10, type=int)
+    parser.add_argument("-s", "--semantic_load_ckp", default=None)
+    parser.add_argument("-c", "--coarse_load_ckp", default=None)
+    parser.add_argument("-f", "--fine_load_ckp", default=None)
     args = parser.parse_args()
-    checkpoints = (
-        args.semantic_load_ckp,
-        args.coarse_load_ckp,
-        args.fine_load_ckp,
+    checkpoints = dict(
+        semantic=args.semantic_load_ckp,
+        coarse=args.coarse_load_ckp,
+        fine=args.fine_load_ckp,
     )
-    return args.model_to_train, args.load_ckpt, args.run_number, checkpoints
+    config = dict(
+        batch_size=args.batch_size,
+        data_max_lenght_sec=args.data_max_lenght_sec,
+    )
+    return (
+        args.model_to_train,
+        args.load_ckpt,
+        args.run_number,
+        args.resume,
+        config,
+        checkpoints,
+    )
+
+
+def get_last_checkpoint(model_to_train):
+    dirs = glob(f"{RESULTS_ROOT_PATH}/results_{model_to_train}/*")
+    if len(dirs) == 0:
+        return None
+    return sorted(dirs, key=lambda x: int(x.split(".")[-2]))[-1]
 
 
 def main():
@@ -303,12 +335,13 @@ def main():
         model_to_train,
         load_ckpt,
         run_number,
+        resume,
+        config,
         checkpoints,
     ) = parse_arguments()
 
     inference = model_to_train == "inference"
 
-    semantic_load_path, coarse_load_path, fine_load_path = checkpoints
     output_path = RESULTS_ROOT_PATH + f"/generated/out{run_number}.wav"
     sample_rate = 44100
 
@@ -318,15 +351,29 @@ def main():
     if not inference:
         run = wandb.init(
             name=f"{model_to_train}_{run_number}",
-            reinit=True,
+            resume=resume,
             project="project",
             entity="cmu-idl",
+            config=config,
         )
         print(run.id)
 
-        trainer = get_trainer(model_to_train, *auxiliar_models)
+        trainer = get_trainer(
+            model_to_train,
+            *auxiliar_models,
+            batch_size=config["batch_size"],
+            data_max_lenght_sec=config["data_max_lenght_sec"],
+        )
         if load_ckpt:
-            trainer.load()
+            path = (
+                checkpoints[model_to_train]
+                if checkpoints[model_to_train] is not None
+                else get_last_checkpoint(model_to_train)
+            )
+            if path is not None:
+                print(f"Checkpoint to be loaded {path} ............")
+                trainer.load(path)
+                print(f"Checkpoint in {path} succesfully loaded!")
         custom_train(trainer, wandb.log)
 
     if inference:
@@ -336,12 +383,12 @@ def main():
             codec=soundstream,
             semantic_transformer=get_trainer(
                 "semantic", *auxiliar_models
-            ).load(semantic_load_path),
+            ).load(checkpoints["semantic"]),
             coarse_transformer=get_trainer("coarse", *auxiliar_models).load(
-                coarse_load_path
+                checkpoints["coarse"]
             ),
             fine_transformer=get_trainer("fine", *auxiliar_models).load(
-                fine_load_path
+                checkpoints["fine"]
             ),
         )
 

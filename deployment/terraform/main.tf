@@ -13,6 +13,11 @@ variable "args_python" {
   default = ["semantic","coarse", "fine"] #["semantic", "coarse", "fine"]
 }
 
+variable "instance_types" {
+  type    = list(string)
+  default = ["p3.2xlarge", "g4dn.2xlarge", "g4dn.2xlarge"] #"g4dn.2xlarge" 	p3.2xlarge #EXPENSIVE
+}
+
 
 #Aws security groups
 resource "aws_security_group" "trainer_sec_group" {
@@ -40,7 +45,7 @@ resource "aws_ebs_volume" "training_data_volume" {
   availability_zone = "us-east-2a"
   size              = 700 # Change the volume size as per your requirement
   type              = "gp3"
-  snapshot_id       = "snap-04818e1040e3faac3"#full-data #"snap-07550f117af03163a" #ebs_partial_data_test
+  snapshot_id       =  "snap-04818e1040e3faac3" #"snap-04818e1040e3faac3"#full-data #"snap-07550f117af03163a" #ebs_partial_data_test
 
   tags = {
     Name = "TrainingDataVolume-${count.index + 1}"
@@ -57,22 +62,23 @@ resource "aws_instance" "training_instance" {
   count = length(var.args_python) # Launch 3 instances for training in parallel
 
   ami           = "ami-0996d1ddefe09ff57" # Deep learning AMI with PyTorch
-  instance_type = "g4dn.2xlarge" #"g5.2xlarge" # GPU instance type for faster training
+  instance_type = var.instance_types[count.index] #"g5.2xlarge" # GPU instance type for faster training
   vpc_security_group_ids = [
     aws_security_group.trainer_sec_group.id
   ] 
+  availability_zone = "us-east-2a"
   # Use a user data script to install dependencies and start training
   user_data = <<-EOF
               #!/bin/bash
               (
               #Wait for attachment to be ready
               echo "Sleeping 10 sec"
-              sleep 10
+              sleep 30
               echo "Resuming.."
             
               # Attach Amazon EBS volume for training data
               sudo mkdir /mnt/data
-              sudo mount /dev/nvme2n1 /mnt/data || sudo mount /dev/nvme1n1 /mnt/data
+              sudo mount /dev/nvme2n1 /mnt/data || sudo mount /dev/nvme1n1 /mnt/data  || sudo mount /dev/xvdf /mnt/data
               sudo chown -R ubuntu:ubuntu /mnt/data
 
               sudo apt update
@@ -86,16 +92,21 @@ resource "aws_instance" "training_instance" {
               sudo pip install -r /home/ubuntu/requirements.txt
               
               export $(cat .env | xargs) &> /dev/null
+              
+              #Purge huge files
+              find /mnt/data/data/ -size +10M -delete
               # Start training script
-              mkdir results
-              python3 /home/ubuntu/app.py ${var.args_python[count.index]} --run_number 0
-              )  &> /home/ubuntu/log.txt
+              mkdir -p /mnt/data/results
+              sudo chown -R ubuntu:ubuntu /mnt/data/results
+              python3 /home/ubuntu/app.py ${var.args_python[count.index]} --run_number 6
+              )  &> /home/ubuntu/log.txt &
+              disown
               EOF
 
   root_block_device {
     delete_on_termination = true
-    iops = 150
-    volume_size = 45
+    iops = 3000
+    volume_size = 70
     volume_type = "gp3"
   }
   
@@ -107,6 +118,7 @@ resource "aws_instance" "training_instance" {
   depends_on = [ aws_security_group.trainer_sec_group, aws_ebs_volume.training_data_volume]
 }
 
+#TODO: attach device inmediately
 resource "aws_volume_attachment" "trainer_vol" {
     count = length(var.args_python)
     device_name = "/dev/xvdf"
