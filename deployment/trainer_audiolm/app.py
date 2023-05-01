@@ -207,7 +207,7 @@ def get_trainer(
             folder=dataset_folder,
             batch_size=batch_size,
             data_max_length_seconds=data_max_lenght_sec,
-            save_results_every=save_every,
+            save_results_every=30,
             save_model_every=save_every,
             num_train_steps=total_steps,
             results_folder=RESULTS_ROOT_PATH + "/results_semantic",
@@ -299,6 +299,7 @@ def parse_arguments():
     parser.add_argument("-n", "--run_number", default=0)
     parser.add_argument("-r", "--resume", default=False, type=bool)
     parser.add_argument("-bs", "--batch_size", default=1, type=int)
+    parser.add_argument("-len", "--max_length", default=2048, type=int)
     parser.add_argument("-dls", "--data_max_lenght_sec", default=10, type=int)
     parser.add_argument("-s", "--semantic_load_ckp", default=None)
     parser.add_argument("-c", "--coarse_load_ckp", default=None)
@@ -378,18 +379,18 @@ def main():
 
     if inference:
         # Everything together
+        semantic_trainer = get_trainer("semantic", *auxiliar_models)
+        semantic_trainer.load(checkpoints["semantic"])
+        coarse_trainer = get_trainer("coarse", *auxiliar_models)
+        coarse_trainer.load(checkpoints["coarse"])
+        fine_trainer = get_trainer("fine", *auxiliar_models)
+        fine_trainer.load(checkpoints["fine"])
         audiolm = AudioLM(
             wav2vec=wav2vec,
             codec=soundstream,
-            semantic_transformer=get_trainer(
-                "semantic", *auxiliar_models
-            ).load(checkpoints["semantic"]),
-            coarse_transformer=get_trainer("coarse", *auxiliar_models).load(
-                checkpoints["coarse"]
-            ),
-            fine_transformer=get_trainer("fine", *auxiliar_models).load(
-                checkpoints["fine"]
-            ),
+            semantic_transformer=semantic_trainer.transformer,
+            coarse_transformer=coarse_trainer.transformer,
+            fine_transformer=fine_trainer.transformer,
         )
 
         text_embeddings = quantizer(
